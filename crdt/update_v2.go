@@ -16,6 +16,11 @@ const maxV2Items = uint64(1 << 20) // 1 million items
 
 type v2Encoder struct {
 	keyClock int
+	// dedupKeys enables key back-references on encode (see WithV2KeyDedup).
+	// Zero value (false) is the conformant default; keyMap is only allocated
+	// when the option is set.
+	dedupKeys bool
+	keyMap    map[string]int
 
 	keyClockEnc   encoding.IntDiffOptRleEncoder
 	clientEnc     encoding.UintOptRleEncoder
@@ -31,10 +36,39 @@ type v2Encoder struct {
 	dsCurrVal uint64
 }
 
-func newV2Encoder() *v2Encoder {
-	return &v2Encoder{
+// V2EncodeOption configures a V2 update encoder. The zero configuration is
+// byte-identical to the yjs reference encoder.
+type V2EncodeOption func(*v2Encoder)
+
+// WithV2KeyDedup enables key deduplication on the V2 encoder: repeated keys
+// (ContentFormat keys, XmlElement node names, parentSub) are written once and
+// then back-referenced by keyClock, producing strictly smaller updates for
+// documents with recurring keys.
+//
+// Trade-off — do not enable blindly: the yjs reference encoder has this
+// feature DELIBERATELY disabled (its `keyMap.set(key, keyClock)` line is
+// commented out with the note "Older clients won't be able to read updates
+// when we reintroduce this feature", because older yjs clients decoded
+// ContentFormat keys with readString rather than readKey). Deduped updates
+// are NOT byte-identical to yjs output and are only readable by decoders
+// with readKey back-reference support: modern yjs (13.x) and ygo. Enable it
+// only when you control every consumer of the encoded updates. The decoder
+// side always accepts both shapes; this option affects encoding only.
+func WithV2KeyDedup() V2EncodeOption {
+	return func(e *v2Encoder) {
+		e.dedupKeys = true
+		e.keyMap = make(map[string]int)
+	}
+}
+
+func newV2Encoder(opts ...V2EncodeOption) *v2Encoder {
+	e := &v2Encoder{
 		restEnc: encoding.NewEncoder(),
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 func (e *v2Encoder) toBytes() []byte {
@@ -104,7 +138,17 @@ func (e *v2Encoder) writeLen(l int) {
 // clients decode ContentFormat keys with readString and cannot read deduped
 // updates at all. The DECODER (readKey) keeps dedup support, exactly like
 // Yjs's readKey. (#yxml-wire)
+//
+// Deployments that control both ends can opt in to dedup via WithV2KeyDedup
+// (see its comment for the compatibility trade-off).
 func (e *v2Encoder) writeKey(key string) {
+	if e.dedupKeys {
+		if clock, ok := e.keyMap[key]; ok {
+			e.keyClockEnc.Write(int64(clock))
+			return
+		}
+		e.keyMap[key] = e.keyClock
+	}
 	e.keyClockEnc.Write(int64(e.keyClock))
 	e.keyClock++
 	e.stringEnc.Write(key)
@@ -336,8 +380,8 @@ func (d *v2Decoder) readDsLen() (uint64, error) {
 
 // ── V2 encoding ───────────────────────────────────────────────────────────────
 
-func encodeV2Locked(doc *Doc, sv StateVector) []byte {
-	enc := newV2Encoder()
+func encodeV2Locked(doc *Doc, sv StateVector, opts ...V2EncodeOption) []byte {
+	enc := newV2Encoder(opts...)
 
 	type clientGroup struct {
 		client     ClientID

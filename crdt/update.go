@@ -55,11 +55,23 @@ func ApplyUpdateV1(doc *Doc, update []byte, origin any) error {
 
 // EncodeStateAsUpdateV2 encodes the document state using the Yjs V2
 // column-oriented binary format.  The output is interoperable with
-// Y.applyUpdateV2 / Y.encodeStateAsUpdateV2 from the yjs npm package.
+// Y.applyUpdateV2 / Y.encodeStateAsUpdateV2 from the yjs npm package,
+// byte-identically for the same document state.
 func EncodeStateAsUpdateV2(doc *Doc, sv StateVector) []byte {
 	doc.mu.Lock()
 	defer doc.mu.Unlock()
 	return encodeV2Locked(doc, sv)
+}
+
+// EncodeStateAsUpdateV2Opts is EncodeStateAsUpdateV2 with encoder options.
+// With no options it is byte-identical to EncodeStateAsUpdateV2 (and to the
+// yjs reference encoder); see WithV2KeyDedup for the opt-in key-dedup
+// trade-off. A separate function (rather than widening EncodeStateAsUpdateV2)
+// keeps the original assignable to func(*Doc, StateVector) []byte.
+func EncodeStateAsUpdateV2Opts(doc *Doc, sv StateVector, opts ...V2EncodeOption) []byte {
+	doc.mu.Lock()
+	defer doc.mu.Unlock()
+	return encodeV2Locked(doc, sv, opts...)
 }
 
 // ApplyUpdateV2 decodes and integrates a Yjs V2 binary update into doc.

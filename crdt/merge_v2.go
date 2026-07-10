@@ -94,7 +94,7 @@ func decodeStructsV2(scratch *Doc, update []byte) (map[ClientID][]*Item, DeleteS
 // update. Mirrors encodeStructStoreV1 but uses the columnar V2 encoder and the
 // V2 conventions (clients written in DESCENDING order; skip length on the rest
 // stream). store provides origin look-ups for encodeItemV2.
-func encodeStructStoreV2(perClient map[ClientID][]*Item, ds DeleteSet, sv StateVector, store *StructStore) []byte {
+func encodeStructStoreV2(perClient map[ClientID][]*Item, ds DeleteSet, sv StateVector, store *StructStore, opts ...V2EncodeOption) []byte {
 	clients := make([]ClientID, 0, len(perClient))
 	for c, items := range perClient {
 		if len(items) > 0 {
@@ -147,7 +147,7 @@ func encodeStructStoreV2(perClient map[ClientID][]*Item, ds DeleteSet, sv StateV
 		}
 	}
 
-	enc := newV2Encoder()
+	enc := newV2Encoder(opts...)
 	enc.restEnc.WriteVarUint(uint64(len(groups)))
 	for _, g := range groups {
 		enc.restEnc.WriteVarUint(uint64(len(g.entries)))
@@ -169,21 +169,34 @@ func encodeStructStoreV2(perClient map[ClientID][]*Item, ds DeleteSet, sv StateV
 // MergeUpdatesV2 merges several V2 updates into one at the struct level
 // (preserving non-integrable structs and clock gaps; unioning delete sets). (#57)
 func MergeUpdatesV2(updates ...[]byte) ([]byte, error) {
+	return MergeUpdatesV2Opts(updates)
+}
+
+// MergeUpdatesV2Opts is MergeUpdatesV2 with encoder options (updates as a
+// slice, since both parameters can't be variadic). With no options the output
+// is identical to MergeUpdatesV2; see WithV2KeyDedup.
+func MergeUpdatesV2Opts(updates [][]byte, opts ...V2EncodeOption) ([]byte, error) {
 	perClient, ds, store, err := buildMergeStore(updates, decodeStructsV2)
 	if err != nil {
 		return nil, err
 	}
-	return encodeStructStoreV2(perClient, ds, StateVector{}, store), nil
+	return encodeStructStoreV2(perClient, ds, StateVector{}, store, opts...), nil
 }
 
 // DiffUpdateV2 returns the portion of a V2 update missing from sv (structs
 // sliced at the sv boundary; full delete set preserved). (#57)
 func DiffUpdateV2(update []byte, sv StateVector) ([]byte, error) {
+	return DiffUpdateV2Opts(update, sv)
+}
+
+// DiffUpdateV2Opts is DiffUpdateV2 with encoder options. With no options the
+// output is identical to DiffUpdateV2; see WithV2KeyDedup.
+func DiffUpdateV2Opts(update []byte, sv StateVector, opts ...V2EncodeOption) ([]byte, error) {
 	perClient, ds, store, err := buildMergeStore([][]byte{update}, decodeStructsV2)
 	if err != nil {
 		return nil, err
 	}
-	return encodeStructStoreV2(perClient, ds, sv, store), nil
+	return encodeStructStoreV2(perClient, ds, sv, store, opts...), nil
 }
 
 // EncodeStateVectorFromUpdateV2 extracts the state vector described by a V2
